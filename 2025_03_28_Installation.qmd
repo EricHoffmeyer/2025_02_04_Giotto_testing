@@ -1,0 +1,171 @@
+---
+title: "2025_03_28_Installation"
+format: html
+viewer: source
+---
+
+I ran into a few issues running the two vignettes for Giotto.
+
+This notebook will look at the dependencies page from the workshop to make sure I have everything correctly installed.
+
+Taken from https://drieslab.github.io/giotto_workshop_2024/datasets-packages.html#cran-dependencies
+
+### 2.1.8 Xenium
+
+Download the Xenium tutuorial datset here:
+
+https://www.10xgenomics.com/datasets/preview-data-ffpe-human-lung-cancer-with-xenium-multimodal-cell-segmentation-1-standard
+
+## 2.2 Needed packages
+
+To run all the tutorials from this Giotto Suite workshop you will need to install additional R and Python packages. Here we provide detailed instructions and discuss some common difficulties with installing these packages. The easiest way would be to copy each code snippet into your R/Rstudio Console using fresh a R session.
+
+### 2.2.1 CRAN dependencies:
+
+```{r}
+cran_dependencies <-c("BiocManager", "devtools", "pak")
+
+install.packages(cran_dependencies, Ncpus = 4)
+```
+
+### 2.2.2 terra installation
+
+terra may have some additional steps when installing depending on which system you are on. Please see the terra repo for specifics. Installations of the CRAN release on Windows and Mac are expected to be simple, only requiring the code below.
+
+```{r}
+install.packages("terra")
+```
+
+### 2.2.3 Matrix installation
+
+!! FOR R VERSIONS LOWER THAN 4.4.0 !!
+
+Giotto requires Matrix 1.6-2 or greater, but when installing Giotto with pak on an R version lower than 4.4.0, the installation can fail asking for R 4.5 which doesn’t exist yet. We can solve this by installing the 1.6-5 version directly by un-commenting and running the line below.
+
+# devtools::install_version("Matrix", version = "1.6-5")
+
+### 2.2.4 Rtools installation
+
+Before installing Giotto on a windows PC please make sure to install the relevant version of Rtools. If you have a Mac or linux PC, or have already installed Rtools, please ignore this step.
+
+### 2.2.5 Giotto installation
+
+```{r}
+pak::pak("drieslab/Giotto")
+pak::pak("drieslab/GiottoData")
+```
+
+### 2.2.6 irlba install
+
+Reinstall irlba from source. Avoids the common function 'as_cholmod_sparse' not provided by package 'Matrix' error. See this issue for more info.
+
+```{r}
+install.packages("irlba", type = "source")
+```
+
+### 2.2.7 arrow install
+
+arrow is a suggested package that we use here to open parquet files. The parquet files that 10X provides use zstd compression which the default arrow installation may not provide.
+
+```{r}
+has_arrow <- requireNamespace("arrow", quietly = TRUE)
+zstd <- TRUE
+if (has_arrow) {
+    zstd <- arrow::arrow_info()$capabilities[["zstd"]]
+}
+if (!has_arrow || !zstd) {
+    Sys.setenv(ARROW_WITH_ZSTD = "ON") 
+    install.packages("assertthat", "bit64")
+    install.packages("arrow", repos = c("https://apache.r-universe.dev"))
+}
+```
+
+### 2.2.8 Bioconductor dependencies:
+
+```{r}
+bioc_dependencies <- c(
+    "scran",
+    "ComplexHeatmap",
+    "SpatialExperiment",
+    "ggspavis",
+    "scater",
+    "nnSVG"
+)
+```
+
+### 2.2.9 CRAN packages:
+
+```{r}
+needed_packages_cran <- c(
+    "dplyr",
+    "gstat",
+    "hdf5r",
+    "miniUI",
+    "shiny",
+    "xml2",
+    "future",
+    "future.apply",
+    "exactextractr",
+    "tidyr",
+    "viridis",
+    "quadprog",
+    "Rfast",
+    "pheatmap",
+    "patchwork",
+    "Seurat",
+    "harmony",
+    "scatterpie",
+    "R.utils",
+    "qs"
+)
+
+pak::pkg_install(c(bioc_dependencies,
+                   needed_packages_cran))
+```
+
+2.2.10 Packages from GitHub
+
+```{r}
+github_packages <- c(
+    "satijalab/seurat-data"
+)
+pak::pkg_install(github_packages)
+```
+
+2.2.11 Python environments
+
+NOTE: the default code uses python 3.8, I had to update to 3.9 to get imagecodecs to work.
+
+```{r}
+# default giotto environment
+Giotto::installGiottoEnvironment()
+
+reticulate::py_install(
+    pip = TRUE,
+    envname = 'giotto_env',
+    packages = c(
+        "scanpy"
+    )
+)
+
+# install another environment with py 3.8 for cellpose
+reticulate::conda_create(envname = "giotto_cellpose",
+                         python_version = 3.9)
+#.restart.R()
+reticulate::use_condaenv('giotto_cellpose')
+reticulate::py_install(
+  pip = TRUE,
+  envname = 'giotto_cellpose',
+  packages = c(
+    "pandas",
+    "networkx",
+    "python-igraph",
+    "leidenalg",
+    "scikit-learn",
+    "cellpose",
+    "smfishhmrf",
+    'tifffile',
+    'scikit-image'
+  )
+)
+```
