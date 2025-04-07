@@ -1,0 +1,194 @@
+---
+title: "2025_04_02_R_interactivity"
+format: html
+---
+
+This notebook will work through part 17 of the Dries Lab Giotto workshop
+
+# Interactivity with the R/Spatial ecosystem
+
+## 17.1 Visium technology
+
+![](images/clipboard-2754129070.png)
+
+Visium by 10x Genomics is a spatial gene expression platform that allows for the mapping of gene expression to high-resolution histology through RNA sequencing The process involves placing a tissue section on a specially prepared slide with an array of barcoded spots, which are 55 µm in diameter with a spot to spot distance of 100 µm. Each spot contains unique barcodes that capture the mRNA from the tissue section, preserving the spatial information. After the tissue is imaged and RNA is captured, the mRNA is sequenced, and the data is mapped back to the tissue”s spatial coordinates. This technology is particularly useful in understanding complex tissue environments, such as tumors, by providing insights into how gene expression varies across different regions.
+
+## 17.2 Gene expression interpolation through kriging
+
+Low resolution spatial data typically covers multiple cells making it difficult to delineate the cell contribution to gene expression. Using a process called kriging we can interpolate gene expression and map it to the single cell level from low resolution datasets. Kriging is a spatial interpolation technique that estimates unknown values at specific locations by weighing nearby known values based on distance and spatial trends. It uses a model to account for both the distance between points and the overall pattern in the data to make accurate predictions. By taking discrete measurement spots, such as those used for visium, we can interpolate gene expression to a finer scale using kriging.
+
+![](images/clipboard-2754129070.png)
+
+### 17.2.2 Generating a geojson file of nuclei location
+
+For the following sections we will need to create a `geojson` that contains polygon information for the nuclei in the sample.
+
+We will be providing this in the following link,
+
+however when using for your own datasets this will need to be done outside of Giotto. A tutorial for this using qupath can be found here: <https://qupath.readthedocs.io/en/stable/docs/tutorials/cell_detection.html>
+
+## 17.3 Downloading the dataset
+
+We first need to import a dataset that we want to perform kriging on.
+
+```{r}
+data_directory <- "data/r_interacitivity"
+
+dir.create(data_directory, showWarnings = F)
+
+download.file(url = "https://cf.10xgenomics.com/samples/spatial-exp/1.1.0/V1_Adult_Mouse_Brain/V1_Adult_Mouse_Brain_raw_feature_bc_matrix.tar.gz",
+              destfile = file.path(data_directory, "V1_Adult_Mouse_Brain_raw_feature_bc_matrix.tar.gz"))
+
+download.file(url = "https://cf.10xgenomics.com/samples/spatial-exp/1.1.0/V1_Adult_Mouse_Brain/V1_Adult_Mouse_Brain_spatial.tar.gz",
+              destfile = file.path(data_directory, "V1_Adult_Mouse_Brain_spatial.tar.gz"))
+```
+
+## 17.5 Downloading giotto object and nuclei segmentation
+
+We will need nuclei/cell segmentations to perform the kriging. Later in the tutorial we’ll also be using a pre-made giotto object. Download them using the following:
+
+```{r}
+destfile <- file.path(data_directory, "subcellular_gobject.zip")
+
+options(timeout = Inf) # Needed to download large files
+
+download.file("https://zenodo.org/records/13144556/files/Day3_Session6.zip?download=1", destfile = destfile)
+
+unzip(file.path(data_directory, "subcellular_gobject.zip"), exdir = data_directory)
+```
+
+## 17.6 Importing visium data
+
+We’re going to begin by creating a Giotto object for the visium mouse brain dataset. This tutorial won’t go into detail about each of these steps as these have been covered for this dataset in section 6. To get the best results when performing gene expression interpolation we need to identify spatially distinct genes. Therefore, we need to perform nearest neighbor to create a spatial network.
+
+If you have a Giotto object from day 1 session 5, feel free to load that in and skip this first step.
+
+```{r}
+library(Giotto)
+
+save_directory <- "results/03_session6"
+visium_save_directory <- file.path(save_directory, "visium_mouse_brain")
+subcell_save_directory <- file.path(save_directory, "pseudo_subcellular/")
+
+instrs <- createGiottoInstructions(show_plot = TRUE,
+                                   save_plot = TRUE,
+                                   save_dir = visium_save_directory)
+
+v_brain <- createGiottoVisiumObject(data_directory, 
+                                    gene_column_index = 2, 
+                                    instructions = instrs)
+
+# Subset to in tissue only
+cm <- pDataDT(v_brain)
+in_tissue_barcodes <- cm[in_tissue == 1]$cell_ID
+v_brain <- subsetGiotto(v_brain, 
+                        cell_ids = in_tissue_barcodes)
+
+# Filter
+v_brain <- filterGiotto(gobject = v_brain,
+                        expression_threshold = 1,
+                        feat_det_in_min_cells = 50,
+                        min_det_feats_per_cell = 1000,
+                        expression_values = "raw")
+
+# Normalize
+v_brain <- normalizeGiotto(gobject = v_brain,
+                           scalefactor = 6000,
+                           verbose = TRUE)
+
+# Add stats
+v_brain <- addStatistics(gobject = v_brain)
+
+# ID HVF
+v_brain <- calculateHVF(gobject = v_brain, 
+                        method = "cov_loess")
+
+fm <- fDataDT(v_brain)
+hv_feats <- fm[hvf == "yes" & perc_cells > 3 & mean_expr_det > 0.4]$feat_ID
+
+# Dimension Reductions
+v_brain <- runPCA(gobject = v_brain,
+                  feats_to_use = hv_feats)
+
+v_brain <- runUMAP(v_brain,
+                   dimensions_to_use = 1:10,
+                   n_neighbors = 15,
+                   set_seed = TRUE)
+
+# NN Network
+v_brain <- createNearestNetwork(gobject = v_brain,
+                                dimensions_to_use = 1:10,
+                                k = 15)
+# Leiden Cluster
+v_brain <- doLeidenCluster(gobject = v_brain,
+                           resolution = 0.4,
+                           n_iterations = 1000,
+                           set_seed = TRUE)
+
+# Spatial Network (kNN)
+v_brain <- createSpatialNetwork(gobject = v_brain,
+                                method = "kNN",
+                                k = 5,
+                                maximum_distance_knn = 400,
+                                name = "spatial_network")
+
+spatPlot2D(gobject = v_brain,
+           spat_unit = "cell",
+           cell_color = "leiden_clus",
+           show_image = TRUE,
+           point_size = 1.5,
+           point_shape = "no_border",
+           background_color = "black",
+           show_legend = TRUE,
+           save_plot = TRUE,
+           save_param = list(save_name = "03_ses6_1_vis_spat"))
+```
+
+Here we can see the clustering of the regular visium spots is able to identify distinct regions of the mouse brain.
+
+### 17.6.1 Identifying spatially organized features
+
+We need to identify genes to be used for interpolation. This works best with genes that are spatially distinct. To identify these genes we’ll use 1. For this tutorial we’ll only use the top 15 spatially distinct genes. The more genes used for interpolation the longer the analysis will take. When running this for your own datasets you should use more genes. We are only using 15 here to minimize analysis time.
+
+```{r}
+# Spatially Variable Features
+ranktest <- binSpect(v_brain,
+                     bin_method = "rank",
+                     calc_hub = TRUE,
+                     hub_min_int = 5,
+                     spatial_network_name = "spatial_network",
+                     do_parallel = TRUE,
+                     cores = 8) #not able to provide a seed number, so do not set one
+
+# Getting the top 15 spatially organized genes
+ext_spatial_features <- ranktest[1:15,]$feats
+```
+
+##17.7 Performing kriging
+
+###17.7.1 Interpolating features
+
+Now we can perform gene expression interpolation. This involves creating a raster image for the gene expression of each of the selected genes. The steps from here can be time consuming and require large amounts of memory.
+
+We will only be analyzing 15 genes to show the process of expression interpolation. For clustering and other analyses more genes are required.
+
+```{r}
+future::plan(future::multisession()) # comment out for single threading
+
+v_brain <- interpolateFeature(v_brain,
+                                      spat_unit = "cell",
+                                      feat_type = "rna",
+                                      ext = ext(v_brain),
+                                      feats = ext_spatial_features,
+                                      overwrite = TRUE)
+
+print(v_brain)
+```
+
+
+
+
+
+
+
+
